@@ -706,7 +706,7 @@ def index():
         password = hashlib.sha256(request.form.get('password', '').encode()).hexdigest()
         user = db.execute_query("SELECT id, username, full_name, role FROM users WHERE username=%s AND password_hash=%s AND is_active=1", (username, password), fetch_one=True)
         if user:
-            session['user'] = {'id': user[0], 'username': user[1], 'full_name': user[2], 'role': user[3]}
+            session['user'] = {'id': user['id'], 'username': user['username'], 'full_name': user['full_name'], 'role': user['role']}
             log_action(user[0], user[1], "login", "Вход в систему", request.remote_addr)
             return redirect(url_for('index'))
         return render_template_string(MAIN_TEMPLATE, error="Неверный логин или пароль", servers=[], queries=[])
