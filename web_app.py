@@ -686,7 +686,7 @@ def index():
     if request.method == 'POST':
         username = request.form.get('username')
         password = hashlib.sha256(request.form.get('password', '').encode()).hexdigest()
-        user = db.execute_query("SELECT id, username, full_name, role FROM users WHERE username=? AND password_hash=? AND is_active=1", (username, password), fetch_one=True)
+        user = db.execute_query("SELECT id, username, full_name, role FROM users WHERE username=%s AND password_hash=%s AND is_active=1", (username, password), fetch_one=True)
         if user:
             session['user'] = {'id': user[0], 'username': user[1], 'full_name': user[2], 'role': user[3]}
             log_action(user[0], user[1], "login", "Вход в систему", request.remote_addr)
@@ -714,7 +714,7 @@ def api_generate_password():
 
 @app.route('/api/query/<int:query_id>')
 def api_get_query(query_id):
-    query = db.execute_query("SELECT id, name, description, sql_text, parameters, server_type FROM queries WHERE id=?", (query_id,), fetch_one=True)
+    query = db.execute_query("SELECT id, name, description, sql_text, parameters, server_type FROM queries WHERE id=%s", (query_id,), fetch_one=True)
     if not query:
         return jsonify({"error": "Not found"}), 404
     
@@ -950,7 +950,7 @@ def api_admin_users():
 def api_admin_user(user_id):
     if not session.get('user') or session['user']['role'] != 'admin':
         return jsonify({"error": "Unauthorized"}), 401
-    user = db.execute_query("SELECT id, username, full_name, role FROM users WHERE id=?", (user_id,), fetch_one=True)
+    user = db.execute_query("SELECT id, username, full_name, role FROM users WHERE id=%s", (user_id,), fetch_one=True)
     server_access = db.execute_query("SELECT server_id FROM user_server_access WHERE user_id=?", (user_id,), fetch_all=True) or []
     query_access = db.execute_query("SELECT query_id FROM user_query_access WHERE user_id=?", (user_id,), fetch_all=True) or []
     if not user:
