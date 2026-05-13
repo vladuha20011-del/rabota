@@ -2,7 +2,7 @@
 # Система запросов к БД - полная версия
 
 from flask import Flask, render_template_string, request, jsonify, session, redirect, url_for
-import sqlite3
+import mysql.connector
 import hashlib
 import pymysql
 import json
@@ -26,106 +26,129 @@ DB_TYPES = {
     "sdbp": {"name": "СДБП", "db_prefix": "sdbp"}
 }
 
-# ==================== РАБОТА С ЛОКАЛЬНОЙ БД ====================
+# ==================== РАБОТА С ЛОКАЛЬНОЙ БД (MySQL) ====================
 class Database:
-    def __init__(self, db_path='web_app_data.db'):
-        self.db_path = db_path
+    def __init__(self):
         self._init_db()
+    
+    def _get_conn(self):
+        return mysql.connector.connect(
+            host='localhost',
+            user='web_user',
+            password='Dkflbckfd2000',
+            database='web_app_db'
+        )
     
     def _init_db(self):
         conn = self._get_conn()
-        try:
-            conn.execute('PRAGMA journal_mode=WAL')
-            conn.execute('PRAGMA synchronous=NORMAL')
-            c = conn.cursor()
-            
-            c.execute('''CREATE TABLE IF NOT EXISTS servers (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                region_code TEXT UNIQUE NOT NULL,
-                region_name TEXT NOT NULL,
-                host TEXT NOT NULL,
-                database_name TEXT NOT NULL,
-                db_type TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )''')
-            
-            c.execute('''CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                full_name TEXT NOT NULL,
-                role TEXT DEFAULT 'user',
-                is_active INTEGER DEFAULT 1,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )''')
-            
-            c.execute('''CREATE TABLE IF NOT EXISTS user_server_access (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                server_id INTEGER,
-                can_view INTEGER DEFAULT 1,
-                can_export INTEGER DEFAULT 0,
-                UNIQUE(user_id, server_id)
-            )''')
-            
-            c.execute('''CREATE TABLE IF NOT EXISTS user_query_access (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                query_id INTEGER,
-                can_view INTEGER DEFAULT 1,
-                UNIQUE(user_id, query_id)
-            )''')
-            
-            c.execute('''CREATE TABLE IF NOT EXISTS queries (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                description TEXT,
-                sql_text TEXT NOT NULL,
-                parameters TEXT,
-                server_type TEXT,
-                created_by INTEGER,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )''')
-            
-            c.execute('''CREATE TABLE IF NOT EXISTS logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                username TEXT,
-                action TEXT,
-                details TEXT,
-                ip_address TEXT,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )''')
-            
-            admin_pass = hashlib.sha256("admin123".encode()).hexdigest()
-            c.execute("INSERT OR IGNORE INTO users (id, username, password_hash, full_name, role) VALUES (1, 'admin', ?, 'Administrator', 'admin')", (admin_pass,))
-            
-            conn.commit()
-        finally:
-            conn.close()
-    
-    def _get_conn(self):
-        return sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
+        cursor = conn.cursor()
+        
+        # Таблица пользователей
+        cursor.execute('''CREATE TABLE IF NOT EXISTS users (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            username VARCHAR(100) UNIQUE NOT NULL,
+            password_hash VARCHAR(255) NOT NULL,
+            full_name VARCHAR(255) NOT NULL,
+            role VARCHAR(50) DEFAULT 'user',
+            is_active INT DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+        
+        # Таблица серверов
+        cursor.execute('''CREATE TABLE IF NOT EXISTS servers (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            region_code VARCHAR(50) UNIQUE NOT NULL,
+            region_name VARCHAR(255) NOT NULL,
+            host VARCHAR(255) NOT NULL,
+            database_name VARCHAR(255) NOT NULL,
+            db_type VARCHAR(50) NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+        
+        # Таблица прав доступа к серверам
+        cursor.execute('''CREATE TABLE IF NOT EXISTS user_server_access (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NOT NULL,
+            server_id INT NOT NULL,
+            can_view INT DEFAULT 1,
+            can_export INT DEFAULT 0,
+            UNIQUE KEY user_server_unique (user_id, server_id)
+        )''')
+        
+        # Таблица запросов
+        cursor.execute('''CREATE TABLE IF NOT EXISTS queries (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            name VARCHAR(255) NOT NULL,
+            description TEXT,
+            sql_text TEXT NOT NULL,
+            parameters TEXT,
+            server_type VARCHAR(50),
+            created_by INT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+        
+        # Таблица прав доступа к запросам
+        cursor.execute('''CREATE TABLE IF NOT EXISTS user_query_access (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NOT NULL,
+            query_id INT NOT NULL,
+            can_view INT DEFAULT 1,
+            UNIQUE KEY user_query_unique (user_id, query_id)
+        )''')
+        
+        # Таблица логов
+        cursor.execute('''CREATE TABLE IF NOT EXISTS logs (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT,
+            username VARCHAR(100),
+            action VARCHAR(255),
+            details TEXT,
+            ip_address VARCHAR(50),
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+        
+        # Админ по умолчанию (пароль: admin123)
+        admin_pass = hashlib.sha256("admin123".encode()).hexdigest()
+        cursor.execute("INSERT IGNORE INTO users (id, username, password_hash, full_name, role) VALUES (1, 'admin', %s, 'Administrator', 'admin')", (admin_pass,))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
     
     def execute_query(self, query, params=None, fetch_one=False, fetch_all=False):
         conn = self._get_conn()
+        cursor = conn.cursor(dictionary=True)
+        
         try:
-            c = conn.cursor()
             if params:
-                c.execute(query, params)
+                cursor.execute(query, params)
             else:
-                c.execute(query)
+                cursor.execute(query)
             
             if fetch_one:
-                return c.fetchone()
+                result = cursor.fetchone()
+                return result
             elif fetch_all:
-                return c.fetchall()
+                result = cursor.fetchall()
+                return result
             else:
                 conn.commit()
-                return c.lastrowid
+                return cursor.lastrowid
         finally:
+            cursor.close()
+            conn.close()
+    
+    def execute_many(self, query, params_list):
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        try:
+            cursor.executemany(query, params_list)
+            conn.commit()
+        finally:
+            cursor.close()
             conn.close()
 
+# Создаем глобальный экземпляр
 db = Database()
 
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
