@@ -164,7 +164,6 @@ def log_action(user_id, username, action, details, ip=""):
     query = "INSERT INTO logs (user_id, username, action, details, ip_address) VALUES (%s, %s, %s, %s, %s)"
     params = (user_id, username, action, details, ip)
     db.execute_query(query, params)
-    )
 
 def get_user_servers(user_id, user_role):
     if user_role == 'admin':
