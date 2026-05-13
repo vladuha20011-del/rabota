@@ -30,7 +30,7 @@ DB_TYPES = {
 class Database:
     def __init__(self):
         self._init_db()
-    
+
     def _get_conn(self):
         return mysql.connector.connect(
             host='localhost',
@@ -38,7 +38,25 @@ class Database:
             password='Dkflbckfd2000',
             database='web_app_db'
         )
-    
+
+    def execute_query(self, query, params=None, fetch_one=False, fetch_all=False):
+        conn = self._get_conn()
+        cursor = conn.cursor(dictionary=True)
+        try:
+            cursor.execute(query, params)
+            if fetch_one:
+                result = cursor.fetchone()
+                return result
+            elif fetch_all:
+                result = cursor.fetchall()
+                return result
+            else:
+                conn.commit()
+                return cursor.lastrowid
+        finally:
+            cursor.close()
+            conn.close()
+
     def _init_db(self):
         conn = self._get_conn()
         cursor = conn.cursor()
