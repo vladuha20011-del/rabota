@@ -1,4 +1,4 @@
-# web_app.py - ФИНАЛЬНАЯ ВЕРСИЯ
+# web_app.py - ИТОГОВАЯ ВЕРСИЯ
 from flask import Flask, render_template_string, request, jsonify, session, redirect, url_for
 import mysql.connector
 import hashlib
@@ -14,15 +14,21 @@ from datetime import datetime
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
 
+# ==================== КОНФИГУРАЦИЯ ====================
 MYSQL_USER = "support"
 MYSQL_PASSWORD = "vdfCD3r34$def"
 MYSQL_PORT = 3306
 
-# ---------------------- ЛОКАЛЬНАЯ БД ----------------------
+DB_TYPES = {
+    "nsi": {"name": "НСИ", "db_prefix": "nsi"},
+    "sdbp": {"name": "СДБП", "db_prefix": "sdbp"}
+}
+
+# ==================== РАБОТА С ЛОКАЛЬНОЙ БД (MySQL) ====================
 class Database:
     def __init__(self):
         self._init_db()
-
+    
     def _get_conn(self):
         return mysql.connector.connect(
             host='localhost',
@@ -30,21 +36,20 @@ class Database:
             password='Dkflbckfd2000',
             database='web_app_db'
         )
-
+    
     def execute_query(self, query, params=None, fetch_one=False, fetch_all=False):
         conn = self._get_conn()
         cursor = conn.cursor(dictionary=True)
         try:
-            if params is None:
-                cursor.execute(query)
-            else:
-                if isinstance(params, tuple):
-                    # Заменяем ? на %s если нужно
-                    query = query.replace('?', '%s')
+            # Заменяем ? на %s для MySQL
+            query = query.replace('?', '%s')
+            if params:
+                if isinstance(params, (tuple, list)):
                     cursor.execute(query, params)
                 else:
                     cursor.execute(query, (params,))
-            
+            else:
+                cursor.execute(query)
             if fetch_one:
                 return cursor.fetchone()
             elif fetch_all:
@@ -55,7 +60,7 @@ class Database:
         finally:
             cursor.close()
             conn.close()
-
+    
     def _init_db(self):
         conn = self._get_conn()
         cursor = conn.cursor()
@@ -127,7 +132,7 @@ class Database:
 
 db = Database()
 
-# ---------------------- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ----------------------
+# ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 def log_action(user_id, username, action, details, ip=""):
     db.execute_query(
         "INSERT INTO logs (user_id, username, action, details, ip_address) VALUES (%s, %s, %s, %s, %s)",
@@ -144,6 +149,7 @@ def get_user_servers(user_id, user_role):
             JOIN user_server_access usa ON s.id = usa.server_id
             WHERE usa.user_id = %s AND usa.can_view = 1
         """, (user_id,), fetch_all=True) or []
+    
     return [{"id": d["id"], "code": d["region_code"], "name": d["region_name"], "host": d["host"], "database": d["database_name"], "type": d["db_type"]} for d in data]
 
 def get_user_queries(user_id, user_role):
@@ -156,6 +162,7 @@ def get_user_queries(user_id, user_role):
             LEFT JOIN user_query_access uqa ON q.id = uqa.query_id AND uqa.user_id = %s
             WHERE uqa.can_view = 1 OR q.created_by = %s
         """, (user_id, user_id), fetch_all=True) or []
+    
     return [{"id": d["id"], "name": d["name"], "description": d["description"]} for d in data]
 
 def generate_password(length=10):
@@ -176,13 +183,14 @@ def get_db_connection(server_id):
     except Exception as e:
         return None, str(e)
 
-# ---------------------- HTML ШАБЛОН (УПРОЩЕННЫЙ) ----------------------
+# ==================== HTML ШАБЛОН ====================
 MAIN_TEMPLATE = '''
 <!DOCTYPE html>
 <html>
 <head>
     <title>Система запросов к БД</title>
     <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; }
@@ -201,6 +209,7 @@ MAIN_TEMPLATE = '''
         .params-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; margin-bottom: 25px; }
         .param-field { display: flex; flex-direction: column; }
         .param-field label { font-size: 13px; font-weight: 600; margin-bottom: 6px; color: #555; }
+        .param-field label .required { color: #dc3545; }
         .param-field input, .param-field select { padding: 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; }
         .region-row { display: flex; gap: 15px; align-items: flex-end; flex-wrap: wrap; margin-top: 10px; padding-top: 15px; border-top: 1px solid #eee; }
         .region-select { flex: 2; min-width: 200px; }
@@ -208,10 +217,12 @@ MAIN_TEMPLATE = '''
         .results { background: white; border-radius: 12px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow-x: auto; }
         .results-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px; }
         .export-btn { background: #28a745; color: white; border: none; padding: 6px 15px; border-radius: 5px; cursor: pointer; font-size: 13px; }
+        .clear-btn { background: #ffc107; color: #333; border: none; padding: 6px 15px; border-radius: 5px; cursor: pointer; font-size: 13px; }
         table { width: 100%; border-collapse: collapse; font-size: 13px; }
         th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
         th { background: #4a86e8; color: white; font-weight: 600; }
         tr:hover { background: #f5f5f5; cursor: pointer; }
+        tr:nth-child(even) { background: #f9f9f9; }
         .loading { text-align: center; padding: 60px; color: #999; }
         .error { color: #dc3545; padding: 15px; background: #ffe0e0; border-radius: 8px; margin: 10px 0; }
         .info { color: #856404; padding: 15px; background: #fff3cd; border-radius: 8px; margin: 10px 0; }
@@ -221,25 +232,40 @@ MAIN_TEMPLATE = '''
         .modal-header h2 { font-size: 20px; }
         .close { cursor: pointer; font-size: 28px; line-height: 20px; }
         .modal-body { padding: 25px; }
+        .section { margin-bottom: 30px; }
+        .section h3 { margin-bottom: 15px; color: #333; border-left: 3px solid #4a86e8; padding-left: 12px; }
         .card { background: #f8f9fa; padding: 15px; margin: 10px 0; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
+        .card-info { flex: 1; }
+        .card-info strong { display: block; }
+        .card-info small { color: #666; font-size: 12px; }
         .btn-icon { background: none; border: none; cursor: pointer; font-size: 18px; padding: 5px 10px; border-radius: 5px; }
         .btn-icon:hover { background: #ddd; }
         .btn-add { background: #28a745; color: white; border: none; padding: 8px 16px; border-radius: 5px; cursor: pointer; margin-top: 10px; }
         .form-group { margin-bottom: 15px; }
         .form-group label { display: block; margin-bottom: 5px; font-weight: 500; }
         .form-group input, .form-group select, .form-group textarea { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px; }
+        .form-row { display: flex; gap: 15px; flex-wrap: wrap; }
+        .form-row .form-group { flex: 1; }
+        .param-builder-row { display: flex; gap: 10px; margin-bottom: 10px; align-items: center; flex-wrap: wrap; padding: 10px; background: white; border-radius: 6px; }
+        .param-builder-row input, .param-builder-row select { padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; }
+        .param-builder-row .param-name { width: 150px; font-weight: bold; background: #e9ecef; }
+        .password-generate { display: flex; gap: 10px; align-items: center; }
+        .password-generate input { flex: 1; }
+        .generate-btn { background: #6c757d; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer; }
         .access-checkboxes { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; margin-top: 10px; max-height: 200px; overflow-y: auto; padding: 10px; background: #f8f9fa; border-radius: 8px; }
+        .access-checkboxes label { display: flex; align-items: center; gap: 8px; font-weight: normal; cursor: pointer; }
+        @media (max-width: 768px) { .params-grid { grid-template-columns: 1fr; } .tab { padding: 6px 12px; font-size: 12px; } }
     </style>
 </head>
 <body>
     {% if not session.user %}
-    <div style="max-width: 420px; margin: 100px auto; background: white; padding: 35px; border-radius: 16px;">
-        <h2>🔐 Вход в систему</h2>
+    <div style="max-width: 420px; margin: 100px auto; background: white; padding: 35px; border-radius: 16px; box-shadow: 0 10px 40px rgba(0,0,0,0.1);">
+        <h2 style="margin-bottom: 25px; color: #1a1a2e;">🔐 Вход в систему</h2>
         {% if error %}<div class="error">{{ error }}</div>{% endif %}
         <form method="post">
             <div class="form-group"><label>Логин</label><input type="text" name="username" required></div>
             <div class="form-group"><label>Пароль</label><input type="password" name="password" required></div>
-            <button type="submit">Войти</button>
+            <button type="submit" style="width:100%; background:#1a1a2e; color:white; border:none; padding:12px; border-radius:6px; font-size:16px; cursor:pointer;">Войти</button>
         </form>
     </div>
     {% else %}
@@ -269,15 +295,7 @@ MAIN_TEMPLATE = '''
         <div class="params-panel" id="paramsPanel" style="display: none;">
             <div id="dynamicParams" class="params-grid"></div>
             <div class="region-row">
-                <div class="param-field region-select">
-                    <label>🌍 Выберите сервер</label>
-                    <select id="serverSelect">
-                        <option value="">-- Выберите сервер --</option>
-                        {% for s in servers %}
-                        <option value="{{ s.id }}">{{ s.name }} ({{ s.code }}) - {{ s.type|upper }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
+                <div class="param-field region-select"><label>🌍 Выберите сервер (регион) <span class="required">*</span></label><select id="serverSelect"><option value="">-- Выберите сервер --</option>{% for s in servers %}<option value="{{ s.id }}">{{ s.name }} ({{ s.code }}) - {{ s.type|upper }}</option>{% endfor %}</select></div>
                 <div class="search-btn"><button onclick="executeQuery()">🔍 Выполнить запрос</button></div>
             </div>
         </div>
@@ -285,172 +303,395 @@ MAIN_TEMPLATE = '''
         <div class="results" id="results"><div class="info">📌 Выберите вкладку с запросом</div></div>
     </div>
     
-    <div id="modalServers" class="modal"><div class="modal-content"><div class="modal-header"><h2>🖥 Управление серверами</h2><span class="close" onclick="closeModal('modalServers')">&times;</span></div><div class="modal-body"><div id="serversList"></div><button class="btn-add" onclick="showServerForm()">+ Добавить сервер</button><div id="serverForm" style="display:none;"><input type="hidden" id="serverId"><div class="form-group"><label>Тип БД</label><select id="serverDbType"><option value="nsi">НСИ</option><option value="sdbp">СДБП</option></select></div><div class="form-group"><label>Номер региона</label><input type="text" id="serverRegionCode"></div><div class="form-group"><label>Название региона</label><input type="text" id="serverRegionName"></div><div class="form-group"><label>Хост</label><input type="text" id="serverHost"></div><div class="form-group"><label>Database</label><input type="text" id="serverDatabase"></div><button class="btn-add" onclick="saveServer()">Сохранить</button><button onclick="hideServerForm()">Отмена</button></div></div></div></div>
+    <!-- Модальное окно: Серверы -->
+    <div id="modalServers" class="modal"><div class="modal-content"><div class="modal-header"><h2>🖥 Управление серверами (регионами)</h2><span class="close" onclick="closeModal('modalServers')">&times;</span></div><div class="modal-body"><div id="serversList"></div><button class="btn-add" onclick="showServerForm()">+ Добавить сервер</button><div id="serverForm" style="display:none; margin-top:20px; padding-top:20px; border-top:1px solid #ddd;"><h3>Добавить/Редактировать сервер</h3><input type="hidden" id="serverId"><div class="form-row"><div class="form-group"><label>Тип БД *</label><select id="serverDbType"><option value="nsi">НСИ</option><option value="sdbp">СДБП</option></select></div><div class="form-group"><label>Номер региона *</label><input type="text" id="serverRegionCode" placeholder="86"></div></div><div class="form-row"><div class="form-group"><label>Название региона *</label><input type="text" id="serverRegionName" placeholder="Нижневартовск"></div><div class="form-group"><label>Хост *</label><input type="text" id="serverHost" placeholder="rds86.tkp2.prod"></div></div><div class="form-group"><label>Database *</label><input type="text" id="serverDatabase" placeholder="nsi86.prod"></div><div style="margin-top:15px;"><button class="btn-add" onclick="saveServer()">Сохранить</button><button class="btn-add" style="background:#6c757d;" onclick="hideServerForm()">Отмена</button></div></div></div></div></div>
     
-    <div id="modalQueries" class="modal"><div class="modal-content"><div class="modal-header"><h2>📋 Управление запросами</h2><span class="close" onclick="closeModal('modalQueries')">&times;</span></div><div class="modal-body"><div id="queriesList"></div><button class="btn-add" onclick="showQueryForm()">+ Добавить запрос</button><div id="queryForm" style="display:none;"><input type="hidden" id="queryId"><div class="form-group"><label>Название</label><input type="text" id="queryName"></div><div class="form-group"><label>Описание</label><input type="text" id="queryDesc"></div><div class="form-group"><label>SQL запрос</label><textarea id="querySql" rows="6"></textarea></div><div class="form-group"><label>Тип сервера</label><select id="queryServerType"><option value="">Все</option><option value="nsi">НСИ</option><option value="sdbp">СДБП</option></select></div><button class="btn-add" onclick="saveQuery()">Сохранить</button><button onclick="hideQueryForm()">Отмена</button></div></div></div></div>
+    <!-- Модальное окно: Запросы -->
+    <div id="modalQueries" class="modal"><div class="modal-content"><div class="modal-header"><h2>📋 Управление запросами (вкладками)</h2><span class="close" onclick="closeModal('modalQueries')">&times;</span></div><div class="modal-body"><div id="queriesList"></div><button class="btn-add" onclick="showQueryForm()">+ Добавить запрос</button><div id="queryForm" style="display:none; margin-top:20px; padding-top:20px; border-top:1px solid #ddd;"><h3>Добавить/Редактировать запрос</h3><input type="hidden" id="queryId"><div class="form-group"><label>Название вкладки *</label><input type="text" id="queryName" placeholder="Поиск по карте"></div><div class="form-group"><label>Описание</label><input type="text" id="queryDesc" placeholder="Краткое описание"></div><div class="form-group"><label>SQL запрос *</label><textarea id="querySql" rows="6" placeholder="SELECT * FROM table WHERE field LIKE :param_name"></textarea><small style="color:#666;">Параметры обозначайте двоеточием, например: :card_mask, :date_from</small></div><div id="paramsBuilderContainer" style="margin-top: 15px;"><label>Настройка параметров:</label><div id="paramsBuilderList"></div><button type="button" class="btn-add" onclick="addParamField()">+ Добавить параметр</button></div><div class="form-group"><label>Тип сервера (оставьте пустым для всех)</label><select id="queryServerType"><option value="">Все типы</option><option value="nsi">НСИ</option><option value="sdbp">СДБП</option></select></div><div style="margin-top:15px;"><button class="btn-add" onclick="saveQuery()">Сохранить</button><button class="btn-add" style="background:#6c757d;" onclick="hideQueryForm()">Отмена</button></div></div></div></div></div>
     
-    <div id="modalUsers" class="modal"><div class="modal-content"><div class="modal-header"><h2>👥 Пользователи</h2><span class="close" onclick="closeModal('modalUsers')">&times;</span></div><div class="modal-body"><div id="usersList"></div><button class="btn-add" onclick="showUserForm()">+ Добавить пользователя</button><div id="userForm" style="display:none;"><input type="hidden" id="userId"><div class="form-group"><label>Логин</label><input type="text" id="userUsername"></div><div class="form-group"><div class="password-generate"><input type="text" id="userPassword" placeholder="Пароль"><button class="generate-btn" onclick="generateUserPassword()">🎲</button></div></div><div class="form-group"><label>Полное имя</label><input type="text" id="userFullName"></div><div class="form-group"><label>Роль</label><select id="userRole"><option value="user">Пользователь</option><option value="admin">Администратор</option></select></div><div class="form-group"><label>Доступ к серверам</label><div id="userServerAccess" class="access-checkboxes"></div></div><div class="form-group"><label>Доступ к запросам</label><div id="userQueryAccess" class="access-checkboxes"></div></div><button class="btn-add" onclick="saveUser()">Сохранить</button><button onclick="hideUserForm()">Отмена</button></div></div></div></div>
+    <!-- Модальное окно: Пользователи -->
+    <div id="modalUsers" class="modal"><div class="modal-content"><div class="modal-header"><h2>👥 Управление пользователями</h2><span class="close" onclick="closeModal('modalUsers')">&times;</span></div><div class="modal-body"><div id="usersList"></div><button class="btn-add" onclick="showUserForm()">+ Добавить пользователя</button><div id="userForm" style="display:none; margin-top:20px; padding-top:20px; border-top:1px solid #ddd;"><h3>Добавить/Редактировать пользователя</h3><input type="hidden" id="userId"><div class="form-group"><label>Логин *</label><input type="text" id="userUsername"></div><div class="form-group"><label>Пароль</label><div class="password-generate"><input type="text" id="userPassword" readonly><button type="button" class="generate-btn" onclick="generateUserPassword()">🎲 Сгенерировать</button></div><small>При создании пароль обязателен. При редактировании - оставьте пустым, чтобы не менять</small></div><div class="form-group"><label>Полное имя *</label><input type="text" id="userFullName"></div><div class="form-group"><label>Роль</label><select id="userRole"><option value="user">Пользователь</option><option value="admin">Администратор</option></select></div><div class="form-group"><label>Доступ к серверам:</label><div id="userServerAccess" class="access-checkboxes"></div></div><div class="form-group"><label>Доступ к запросам (вкладкам):</label><div id="userQueryAccess" class="access-checkboxes"></div></div><div style="margin-top:15px;"><button class="btn-add" onclick="saveUser()">Сохранить</button><button class="btn-add" style="background:#6c757d;" onclick="hideUserForm()">Отмена</button></div></div></div></div></div>
     
-    <div id="modalLogs" class="modal"><div class="modal-content"><div class="modal-header"><h2>📜 Логи</h2><span class="close" onclick="closeModal('modalLogs')">&times;</span></div><div class="modal-body"><div id="logsList"></div></div></div></div>
+    <!-- Модальное окно: Логи -->
+    <div id="modalLogs" class="modal"><div class="modal-content"><div class="modal-header"><h2>📜 Лог действий</h2><span class="close" onclick="closeModal('modalLogs')">&times;</span></div><div class="modal-body"><div id="logsList"></div></div></div></div>
     
-    <div id="detailModal" class="modal"><div class="modal-content"><div class="modal-header"><h2>📋 Детальная информация</h2><span class="close" onclick="closeDetailModal()">&times;</span></div><div class="modal-body" id="detailModalContent"></div></div></div>
+    <!-- Модальное окно деталей -->
+    <div id="detailModal" class="modal"><div class="modal-content"><div class="modal-header"><h2>📋 Детальная информация</h2><span class="close" onclick="closeDetailModal()">&times;</span></div><div class="modal-body" id="detailModalContent"></div><div style="padding:15px; text-align:center; border-top:1px solid #eee;"><button onclick="closeDetailModal()" style="background:#6c757d; color:white; border:none; padding:8px 20px; border-radius:5px; cursor:pointer;">Закрыть</button></div></div></div>
     
     <script>
-        let currentQuery = null, currentResults = null, currentQueryId = null;
+        let currentQuery = null;
+        let currentResults = null;
+        let currentQueryId = null;
+        let paramIndex = 0;
         
-        function loadQuery(qid) {
-            if (currentQueryId !== qid) clearResults();
-            currentQueryId = qid;
-            fetch('/api/query/' + qid).then(r => r.json()).then(d => {
-                currentQuery = d;
+        function loadQuery(queryId) {
+            if (currentQueryId !== queryId) {
+                clearResults();
+            }
+            currentQueryId = queryId;
+            
+            fetch(`/api/query/${queryId}`).then(res => res.json()).then(data => {
+                currentQuery = data;
                 document.getElementById('queryDescBlock').style.display = 'block';
-                document.getElementById('queryNameDisplay').innerText = d.name;
-                document.getElementById('queryDescDisplay').innerText = d.description || '';
-                renderParams(d.parameters);
+                document.getElementById('queryNameDisplay').innerText = data.name;
+                document.getElementById('queryDescDisplay').innerText = data.description || '';
+                renderParams(data.parameters);
+                highlightActiveTab(queryId);
                 document.getElementById('paramsPanel').style.display = 'block';
-                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-                event.target.classList.add('active');
             });
         }
         
         function renderParams(params) {
-            let c = document.getElementById('dynamicParams');
-            if (!params || params.length === 0) { c.innerHTML = '<div class="info">ℹ️ Без параметров</div>'; return; }
-            let h = '';
-            params.forEach(p => { h += `<div class="param-field"><label>${p.label}${p.required?'*':''}</label><input type="${p.type==='date'?'date':'text'}" id="param_${p.name}" placeholder="${p.placeholder||''}"></div>`; });
-            c.innerHTML = h;
+            const container = document.getElementById('dynamicParams');
+            if (!params || params.length === 0) {
+                container.innerHTML = '<div class="info">ℹ️ Этот запрос не требует параметров</div>';
+                return;
+            }
+            let html = '';
+            params.forEach(param => {
+                let inputHtml = '';
+                if (param.type === 'date') {
+                    inputHtml = `<input type="date" id="param_${param.name}" placeholder="${param.placeholder || ''}">`;
+                } else if (param.type === 'select') {
+                    inputHtml = `<select id="param_${param.name}">${param.options || ''}<option value="">-- Выберите --</option></select>`;
+                } else {
+                    inputHtml = `<input type="text" id="param_${param.name}" placeholder="${param.placeholder || ''}">`;
+                }
+                html += `<div class="param-field"><label>${param.label} ${param.required ? '<span class="required">*</span>' : ''}</label>${inputHtml}</div>`;
+            });
+            container.innerHTML = html;
         }
         
-        function clearResults() { document.getElementById('results').innerHTML = '<div class="info">📌 Результаты очищены</div>'; currentResults = null; }
+        function highlightActiveTab(queryId) {
+            document.querySelectorAll('.tab').forEach(tab => {
+                if (tab.onclick && tab.onclick.toString().includes(queryId)) tab.classList.add('active');
+                else tab.classList.remove('active');
+            });
+        }
+        
+        function clearResults() {
+            document.getElementById('results').innerHTML = '<div class="info">📌 Результаты очищены</div>';
+            currentResults = null;
+        }
         
         function executeQuery() {
             if (!currentQuery) { alert('Выберите вкладку'); return; }
-            let sid = document.getElementById('serverSelect').value;
-            if (!sid) { alert('Выберите сервер'); return; }
-            let params = {};
-            if (currentQuery.parameters) currentQuery.parameters.forEach(p => { let inp = document.getElementById('param_'+p.name); if(inp && inp.value) params[p.name]=inp.value; });
-            document.getElementById('results').innerHTML = '<div class="loading">⏳ Выполнение...</div>';
+            const serverId = document.getElementById('serverSelect').value;
+            if (!serverId) { alert('Выберите сервер'); return; }
+            const params = {};
+            if (currentQuery.parameters) {
+                currentQuery.parameters.forEach(param => {
+                    const input = document.getElementById(`param_${param.name}`);
+                    if (input && input.value) params[param.name] = input.value;
+                });
+            }
+            document.getElementById('results').innerHTML = '<div class="loading">⏳ Выполнение запроса...</div>';
             fetch('/api/execute', {
-                method:'POST', headers:{'Content-Type':'application/json'},
-                body:JSON.stringify({query_id:currentQuery.id, server_id:sid, parameters:params})
-            }).then(r=>r.json()).then(d=>{
-                if(d.error) document.getElementById('results').innerHTML = '<div class="error">'+d.error+'</div>';
-                else if(d.results && d.results.length>0) { currentResults = d.results; displayResults(d.results); }
-                else document.getElementById('results').innerHTML = '<div class="info">Ничего не найдено</div>';
-            });
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({query_id: currentQuery.id, server_id: serverId, parameters: params})
+            }).then(res => res.json()).then(data => {
+                if (data.error) document.getElementById('results').innerHTML = '<div class="error">❌ ' + data.error + '</div>';
+                else if (data.results && data.results.length > 0) { currentResults = data.results; displayResults(data.results); }
+                else document.getElementById('results').innerHTML = '<div class="info">📭 Ничего не найдено</div>';
+            }).catch(err => { document.getElementById('results').innerHTML = '<div class="error">Ошибка: ' + err + '</div>'; });
         }
         
-        function displayResults(res) {
-            let headers = Object.keys(res[0]);
-            let html = `<div class="results-header"><div>✅ Найдено: ${res.length}</div><button class="export-btn" onclick="exportExcel()">📊 Excel</button></div><div style="overflow-x:auto;"><table><thead><tr>`;
-            headers.forEach(h=>html+=`<th>${h}</th>`);
-            html+=`</thead><tbody>`;
-            res.forEach((r,i)=>{ html+=`<tr onclick="showDetail(${i})">`; headers.forEach(h=>html+=`<td>${r[h]||''}</td>`); html+=`</tr>`; });
-            html+=`</tbody></table></div>`;
+        function displayResults(results) {
+            if (!results || results.length === 0) {
+                document.getElementById('results').innerHTML = '<div class="info">Ничего не найдено</div>';
+                return;
+            }
+            let headers = Object.keys(results[0]);
+            let html = `<div class="results-header"><div>✅ Найдено записей: ${results.length}</div><div><button class="clear-btn" onclick="clearResults()">🗑 Очистить</button><button class="export-btn" onclick="exportToExcel()" style="margin-left:10px;">📊 Экспорт в Excel</button></div></div><div style="overflow-x: auto;"><table class="results-table"><thead><tr>`;
+            headers.forEach(h => html += `<th>${h}</th>`);
+            html += `</thead><tbody>`;
+            results.forEach((row, idx) => {
+                html += `<tr onclick="showDetail(${idx})" style="cursor: pointer;">`;
+                headers.forEach(h => {
+                    let val = row[h];
+                    if (val === null || val === undefined) val = '';
+                    html += `<td>${val}</td>`;
+                });
+                html += '<tr>';
+            });
+            html += `</tbody></table></div>`;
             document.getElementById('results').innerHTML = html;
         }
         
-        function showDetail(i) {
-            let r = currentResults[i];
-            let html = '<table style="width:100%">';
-            for(let [k,v] of Object.entries(r)) html += `<tr><td style="padding:8px;font-weight:bold">${k}<td style="padding:8px">${v||'Не указано'}`;
-            html += '</table>';
-            document.getElementById('detailModalContent').innerHTML = html;
+        function showDetail(rowIndex) {
+            let row = currentResults[rowIndex];
+            if (!row) return;
+            let detailsHtml = '<table style="width:100%; border-collapse:collapse;">';
+            for (let [key, value] of Object.entries(row)) {
+                let displayValue = value === null || value === undefined ? 'Не указано' : value;
+                detailsHtml += `<tr style="border-bottom:1px solid #eee;"><td style="padding:10px; font-weight:bold; width:40%; background:#f8f9fa;">${key}</td><td style="padding:10px;">${displayValue}</td></tr>`;
+            }
+            detailsHtml += '</table>';
+            document.getElementById('detailModalContent').innerHTML = detailsHtml;
             document.getElementById('detailModal').style.display = 'block';
         }
+        
         function closeDetailModal() { document.getElementById('detailModal').style.display = 'none'; }
         
-        function exportExcel() {
-            if(!currentResults) return;
-            fetch('/api/export_excel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({results:currentResults})})
-            .then(r=>r.json()).then(d=>{ if(d.file_url) window.open(d.file_url); });
+        function exportToExcel() {
+            if (!currentResults || currentResults.length === 0) { alert('Нет данных для экспорта'); return; }
+            fetch('/api/export_excel', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({results: currentResults}) })
+            .then(res => res.json()).then(data => { if (data.file_url) window.open(data.file_url, '_blank'); else alert('Ошибка экспорта'); });
         }
         
-        function openAdminServers() { document.getElementById('modalServers').style.display='block'; loadServers(); }
-        function openAdminQueries() { document.getElementById('modalQueries').style.display='block'; loadQueries(); }
-        function openAdminUsers() { document.getElementById('modalUsers').style.display='block'; loadUsers(); }
-        function openAdminLogs() { document.getElementById('modalLogs').style.display='block'; loadLogs(); }
-        function closeModal(id) { document.getElementById(id).style.display='none'; }
+        // ========== КОНСТРУКТОР ПАРАМЕТРОВ ==========
+        function addParamField() {
+            const container = document.getElementById('paramsBuilderList');
+            const idx = paramIndex++;
+            const html = `
+                <div class="param-builder-row" id="paramRow_${idx}">
+                    <input type="text" placeholder="Имя (в SQL будет :имя)" id="paramName_${idx}" style="width:150px;">
+                    <input type="text" placeholder="Подпись для пользователя" id="paramLabel_${idx}" style="width:150px;">
+                    <select id="paramType_${idx}">
+                        <option value="text">Текст</option>
+                        <option value="date">Дата</option>
+                    </select>
+                    <label style="display: flex; align-items: center; gap: 5px;">
+                        <input type="checkbox" id="paramRequired_${idx}"> Обязательный
+                    </label>
+                    <button class="btn-icon" onclick="removeParamField(${idx})" style="color:#dc3545;">✖</button>
+                </div>
+            `;
+            container.insertAdjacentHTML('beforeend', html);
+        }
+        
+        function removeParamField(idx) {
+            const row = document.getElementById(`paramRow_${idx}`);
+            if (row) row.remove();
+        }
+        
+        function collectParams() {
+            const params = [];
+            for (let i = 0; i < paramIndex; i++) {
+                const name = document.getElementById(`paramName_${i}`);
+                if (name && name.value) {
+                    params.push({
+                        name: name.value,
+                        label: document.getElementById(`paramLabel_${i}`)?.value || name.value,
+                        type: document.getElementById(`paramType_${i}`)?.value || 'text',
+                        required: document.getElementById(`paramRequired_${i}`)?.checked || false,
+                        placeholder: ''
+                    });
+                }
+            }
+            return params;
+        }
+        
+        function parseSqlParams() {
+            let sql = document.getElementById('querySql').value;
+            let paramMatches = sql.match(/:(\w+)/g);
+            if (!paramMatches) { 
+                document.getElementById('paramsBuilderList').innerHTML = '<small>Параметры не найдены (используйте :имя_параметра)</small>';
+                paramIndex = 0;
+                return;
+            }
+            let uniqueParams = [...new Set(paramMatches.map(p => p.substring(1)))];
+            let html = '';
+            paramIndex = 0;
+            uniqueParams.forEach(param => {
+                const idx = paramIndex++;
+                html += `
+                    <div class="param-builder-row" id="paramRow_${idx}">
+                        <input type="text" class="param-name" value="${param}" readonly style="width:150px; background:#e9ecef;">
+                        <input type="text" placeholder="Название поля" id="paramLabel_${idx}" value="${param.replace('_', ' ').title()}" style="width:180px;">
+                        <select id="paramType_${idx}">
+                            <option value="text">Текст</option>
+                            <option value="date">Дата</option>
+                        </select>
+                        <label><input type="checkbox" id="paramRequired_${idx}"> Обязательный</label>
+                        <input type="text" placeholder="Подсказка" id="paramPlaceholder_${idx}" style="width:150px;">
+                    </div>
+                `;
+            });
+            document.getElementById('paramsBuilderList').innerHTML = html;
+        }
+        
+        // ========== АДМИНИСТРИРОВАНИЕ ==========
+        function openAdminServers() { document.getElementById('modalServers').style.display = 'block'; loadServers(); }
+        function openAdminQueries() { document.getElementById('modalQueries').style.display = 'block'; loadQueries(); }
+        function openAdminUsers() { document.getElementById('modalUsers').style.display = 'block'; loadUsers(); }
+        function openAdminLogs() { document.getElementById('modalLogs').style.display = 'block'; loadLogs(); }
+        function closeModal(modalId) { document.getElementById(modalId).style.display = 'none'; }
+        window.onclick = function(event) { if (event.target.classList.contains('modal')) event.target.style.display = 'none'; }
         
         function loadServers() {
-            fetch('/api/admin/servers').then(r=>r.json()).then(d=>{
-                let h=''; d.forEach(s=>{ h+=`<div class="card"><div><strong>${s.region_name} (${s.region_code})</strong><br><small>${s.host} | ${s.database_name}</small></div><div><button onclick="editServer(${s.id})">✏️</button><button onclick="deleteServer(${s.id})">🗑</button></div></div>`; });
-                document.getElementById('serversList').innerHTML = h || '<p>Нет серверов</p>';
-            });
-        }
-        function showServerForm() { document.getElementById('serverForm').style.display='block'; document.getElementById('serverId').value=''; document.getElementById('serverRegionCode').value=''; document.getElementById('serverRegionName').value=''; document.getElementById('serverHost').value=''; document.getElementById('serverDatabase').value=''; }
-        function hideServerForm() { document.getElementById('serverForm').style.display='none'; loadServers(); }
-        function editServer(id){ fetch('/api/admin/server/'+id).then(r=>r.json()).then(s=>{ document.getElementById('serverForm').style.display='block'; document.getElementById('serverId').value=s.id; document.getElementById('serverRegionCode').value=s.region_code; document.getElementById('serverRegionName').value=s.region_name; document.getElementById('serverHost').value=s.host; document.getElementById('serverDatabase').value=s.database_name; }); }
-        function saveServer(){
-            let data={ id:document.getElementById('serverId').value||null, db_type:document.getElementById('serverDbType').value, region_code:document.getElementById('serverRegionCode').value, region_name:document.getElementById('serverRegionName').value, host:document.getElementById('serverHost').value, database_name:document.getElementById('serverDatabase').value };
-            fetch('/api/admin/save_server',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)})
-            .then(r=>r.json()).then(d=>{ if(d.success){ alert('Сохранено'); hideServerForm(); } else alert('Ошибка'); });
-        }
-        function deleteServer(id){ if(confirm('Удалить?')) fetch('/api/admin/delete_server/'+id,{method:'DELETE'}).then(()=>loadServers()); }
-        
-        function loadQueries(){
-            fetch('/api/admin/queries').then(r=>r.json()).then(d=>{
-                let h=''; d.forEach(q=>{ h+=`<div class="card"><div><strong>${q.name}</strong><br><small>${q.description||''}</small></div><div><button onclick="editQuery(${q.id})">✏️</button><button onclick="deleteQuery(${q.id})">🗑</button></div></div>`; });
-                document.getElementById('queriesList').innerHTML = h || '<p>Нет запросов</p>';
-            });
-        }
-        function showQueryForm(){ document.getElementById('queryForm').style.display='block'; document.getElementById('queryId').value=''; document.getElementById('queryName').value=''; document.getElementById('queryDesc').value=''; document.getElementById('querySql').value=''; document.getElementById('queryServerType').value=''; }
-        function hideQueryForm(){ document.getElementById('queryForm').style.display='none'; loadQueries(); }
-        function editQuery(id){ fetch('/api/query/'+id).then(r=>r.json()).then(q=>{ document.getElementById('queryForm').style.display='block'; document.getElementById('queryId').value=q.id; document.getElementById('queryName').value=q.name; document.getElementById('queryDesc').value=q.description||''; document.getElementById('querySql').value=q.sql_text; document.getElementById('queryServerType').value=q.server_type||''; }); }
-        function saveQuery(){
-            let data={ id:document.getElementById('queryId').value||null, name:document.getElementById('queryName').value, description:document.getElementById('queryDesc').value, sql_text:document.getElementById('querySql').value, parameters:[], server_type:document.getElementById('queryServerType').value };
-            fetch('/api/admin/save_query',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)})
-            .then(r=>r.json()).then(d=>{ if(d.success){ alert('Сохранено'); hideQueryForm(); } else alert('Ошибка'); });
-        }
-        function deleteQuery(id){ if(confirm('Удалить?')) fetch('/api/admin/delete_query/'+id,{method:'DELETE'}).then(()=>loadQueries()); }
-        
-        function loadUsers(){
-            fetch('/api/admin/users').then(r=>r.json()).then(d=>{
-                let h=''; d.forEach(u=>{ h+=`<div class="card"><div><strong>${u.username}</strong> (${u.full_name})<br><small>${u.role}</small></div><div><button onclick="editUser(${u.id})">✏️</button>${u.username!=='admin'?`<button onclick="deleteUser(${u.id})">🗑</button>`:''}</div></div>`; });
-                document.getElementById('usersList').innerHTML = h || '<p>Нет пользователей</p>';
-            });
-        }
-        function generateUserPassword(){ fetch('/api/generate_password').then(r=>r.json()).then(d=>{ document.getElementById('userPassword').value=d.password; }); }
-        function showUserForm(){ document.getElementById('userForm').style.display='block'; document.getElementById('userId').value=''; document.getElementById('userUsername').value=''; document.getElementById('userPassword').value=''; document.getElementById('userFullName').value=''; document.getElementById('userRole').value='user'; loadAccessCheckboxes(); }
-        function hideUserForm(){ document.getElementById('userForm').style.display='none'; loadUsers(); }
-        function loadAccessCheckboxes(){
-            fetch('/api/admin/servers').then(r=>r.json()).then(s=>{ let h=''; s.forEach(ss=>{ h+=`<label><input type="checkbox" class="serverAccess" value="${ss.id}"> ${ss.region_name} (${ss.region_code})</label>`; }); document.getElementById('userServerAccess').innerHTML=h; });
-            fetch('/api/admin/queries').then(r=>r.json()).then(q=>{ let h=''; q.forEach(qq=>{ h+=`<label><input type="checkbox" class="queryAccess" value="${qq.id}"> ${qq.name}</label>`; }); document.getElementById('userQueryAccess').innerHTML=h; });
-        }
-        function editUser(id){
-            fetch('/api/admin/user/'+id).then(r=>r.json()).then(u=>{
-                document.getElementById('userForm').style.display='block'; document.getElementById('userId').value=u.id; document.getElementById('userUsername').value=u.username; document.getElementById('userPassword').value=''; document.getElementById('userFullName').value=u.full_name; document.getElementById('userRole').value=u.role;
-                fetch('/api/admin/servers').then(r=>r.json()).then(s=>{ let h=''; s.forEach(ss=>{ let checked=u.server_access.includes(ss.id)?'checked':''; h+=`<label><input type="checkbox" class="serverAccess" value="${ss.id}" ${checked}> ${ss.region_name} (${ss.region_code})</label>`; }); document.getElementById('userServerAccess').innerHTML=h; });
-                fetch('/api/admin/queries').then(r=>r.json()).then(q=>{ let h=''; q.forEach(qq=>{ let checked=u.query_access.includes(qq.id)?'checked':''; h+=`<label><input type="checkbox" class="queryAccess" value="${qq.id}" ${checked}> ${qq.name}</label>`; }); document.getElementById('userQueryAccess').innerHTML=h; });
-            });
-        }
-        function saveUser(){
-            let serverAccess=[], queryAccess=[];
-            document.querySelectorAll('.serverAccess:checked').forEach(cb=>serverAccess.push(parseInt(cb.value)));
-            document.querySelectorAll('.queryAccess:checked').forEach(cb=>queryAccess.push(parseInt(cb.value)));
-            let data={ id:document.getElementById('userId').value||null, username:document.getElementById('userUsername').value, password:document.getElementById('userPassword').value, full_name:document.getElementById('userFullName').value, role:document.getElementById('userRole').value, server_access:serverAccess, query_access:queryAccess };
-            fetch('/api/admin/save_user',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)})
-            .then(r=>r.json()).then(d=>{ if(d.success){ alert(d.message); if(d.password_shown) alert('Пароль: '+d.password_shown); hideUserForm(); } else alert('Ошибка'); });
-        }
-        function deleteUser(id){ if(confirm('Удалить?')) fetch('/api/admin/delete_user/'+id,{method:'DELETE'}).then(()=>loadUsers()); }
-        
-        function loadLogs(){
-            fetch('/api/admin/logs').then(r=>r.json()).then(d=>{
-                let h='<table border="1"><tr><th>Дата</th><th>Пользователь</th><th>Действие</th><th>Детали</th></tr>';
-                d.forEach(l=>{ h+=`<tr><td>${l.timestamp}</td><td>${l.username}</td><td>${l.action}</td><td>${l.details}</td></tr>`; });
-                h+='</table>';
-                document.getElementById('logsList').innerHTML = h;
+            fetch('/api/admin/servers').then(res => res.json()).then(data => {
+                let html = '';
+                data.forEach(s => { html += `<div class="card"><div class="card-info"><strong>${s.region_name} (${s.region_code})</strong><small>Тип: ${s.db_type === 'nsi' ? 'НСИ' : 'СДБП'} | Хост: ${s.host} | БД: ${s.database_name}</small></div><div><button class="btn-icon" onclick="editServer(${s.id})">✏️</button><button class="btn-icon" onclick="deleteServer(${s.id})">🗑</button></div></div>`; });
+                document.getElementById('serversList').innerHTML = html || '<p>Нет серверов</p>';
             });
         }
         
-        window.onclick = function(e) { if(e.target.classList.contains('modal')) e.target.style.display='none'; }
+        function showServerForm() { document.getElementById('serverForm').style.display = 'block'; document.getElementById('serverId').value = ''; document.getElementById('serverDbType').value = 'nsi'; document.getElementById('serverRegionCode').value = ''; document.getElementById('serverRegionName').value = ''; document.getElementById('serverHost').value = ''; document.getElementById('serverDatabase').value = ''; }
+        function hideServerForm() { document.getElementById('serverForm').style.display = 'none'; }
+        function editServer(id) { fetch(`/api/admin/server/${id}`).then(res => res.json()).then(s => { document.getElementById('serverForm').style.display = 'block'; document.getElementById('serverId').value = s.id; document.getElementById('serverDbType').value = s.db_type; document.getElementById('serverRegionCode').value = s.region_code; document.getElementById('serverRegionName').value = s.region_name; document.getElementById('serverHost').value = s.host; document.getElementById('serverDatabase').value = s.database_name; }); }
+        function saveServer() {
+            let data = { id: document.getElementById('serverId').value || null, db_type: document.getElementById('serverDbType').value, region_code: document.getElementById('serverRegionCode').value, region_name: document.getElementById('serverRegionName').value, host: document.getElementById('serverHost').value, database_name: document.getElementById('serverDatabase').value };
+            if (!data.region_code || !data.region_name || !data.host || !data.database_name) { alert('Заполните все поля'); return; }
+            fetch('/api/admin/save_server', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }).then(res => res.json()).then(data => { if (data.success) { alert('Сервер сохранен'); hideServerForm(); loadServers(); } else alert('Ошибка: ' + data.error); });
+        }
+        function deleteServer(id) { if (confirm('Удалить сервер?')) { fetch(`/api/admin/delete_server/${id}`, {method: 'DELETE'}).then(() => loadServers()); } }
+        
+        function loadQueries() {
+            fetch('/api/admin/queries').then(res => res.json()).then(data => {
+                let html = '';
+                data.forEach(q => { html += `<div class="card"><div class="card-info"><strong>${q.name}</strong><small>${q.description || 'Без описания'}</small></div><div><button class="btn-icon" onclick="editQuery(${q.id})">✏️</button><button class="btn-icon" onclick="deleteQuery(${q.id})">🗑</button></div></div>`; });
+                document.getElementById('queriesList').innerHTML = html || '<p>Нет запросов</p>';
+            });
+        }
+        
+        function showQueryForm() {
+            document.getElementById('queryForm').style.display = 'block';
+            document.getElementById('queryId').value = '';
+            document.getElementById('queryName').value = '';
+            document.getElementById('queryDesc').value = '';
+            document.getElementById('querySql').value = '';
+            document.getElementById('queryServerType').value = '';
+            document.getElementById('paramsBuilderList').innerHTML = '';
+            paramIndex = 0;
+        }
+        
+        function hideQueryForm() { document.getElementById('queryForm').style.display = 'none'; }
+        
+        function editQuery(id) {
+            fetch(`/api/query/${id}`).then(res => res.json()).then(q => {
+                document.getElementById('queryForm').style.display = 'block';
+                document.getElementById('queryId').value = q.id;
+                document.getElementById('queryName').value = q.name;
+                document.getElementById('queryDesc').value = q.description || '';
+                document.getElementById('querySql').value = q.sql_text;
+                document.getElementById('queryServerType').value = q.server_type || '';
+                setTimeout(() => {
+                    let paramMatches = q.sql_text.match(/:(\w+)/g);
+                    if (paramMatches) {
+                        let uniqueParams = [...new Set(paramMatches.map(p => p.substring(1)))];
+                        let html = '';
+                        paramIndex = 0;
+                        uniqueParams.forEach(param => {
+                            const idx = paramIndex++;
+                            let existing = (q.parameters || []).find(p => p.name === param) || {};
+                            html += `<div class="param-builder-row" id="paramRow_${idx}">
+                                <input type="text" class="param-name" value="${param}" readonly style="width:150px; background:#e9ecef;">
+                                <input type="text" placeholder="Название поля" id="paramLabel_${idx}" value="${existing.label || param.replace('_', ' ').title()}" style="width:180px;">
+                                <select id="paramType_${idx}">
+                                    <option value="text" ${existing.type === 'text' ? 'selected' : ''}>Текст</option>
+                                    <option value="date" ${existing.type === 'date' ? 'selected' : ''}>Дата</option>
+                                </select>
+                                <label><input type="checkbox" id="paramRequired_${idx}" ${existing.required ? 'checked' : ''}> Обязательный</label>
+                                <input type="text" placeholder="Подсказка" id="paramPlaceholder_${idx}" value="${existing.placeholder || ''}" style="width:150px;">
+                            </div>`;
+                        });
+                        document.getElementById('paramsBuilderList').innerHTML = html;
+                    } else {
+                        document.getElementById('paramsBuilderList').innerHTML = '<small>Параметров не найдено (используйте :имя_параметра в SQL)</small>';
+                        paramIndex = 0;
+                    }
+                }, 100);
+            });
+        }
+        
+        function saveQuery() {
+            let params = collectParams();
+            let data = {
+                id: document.getElementById('queryId').value || null,
+                name: document.getElementById('queryName').value,
+                description: document.getElementById('queryDesc').value,
+                sql_text: document.getElementById('querySql').value,
+                parameters: params,
+                server_type: document.getElementById('queryServerType').value
+            };
+            if (!data.name || !data.sql_text) { alert('Заполните название и SQL запрос'); return; }
+            fetch('/api/admin/save_query', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }).then(res => res.json()).then(data => { if (data.success) { alert('Запрос сохранен'); hideQueryForm(); loadQueries(); location.reload(); } else alert('Ошибка: ' + data.error); });
+        }
+        
+        function deleteQuery(id) { if (confirm('Удалить запрос?')) { fetch(`/api/admin/delete_query/${id}`, {method: 'DELETE'}).then(() => location.reload()); } }
+        
+        function loadUsers() {
+            fetch('/api/admin/users').then(res => res.json()).then(data => {
+                let html = '';
+                data.forEach(u => { html += `<div class="card"><div class="card-info"><strong>${u.username}</strong> (${u.full_name})<small>Роль: ${u.role === 'admin' ? 'Администратор' : 'Пользователь'}</small></div><div><button class="btn-icon" onclick="editUser(${u.id})">✏️</button>${u.username !== 'admin' ? `<button class="btn-icon" onclick="deleteUser(${u.id})">🗑</button>` : ''}</div></div>`; });
+                document.getElementById('usersList').innerHTML = html || '<p>Нет пользователей</p>';
+            });
+        }
+        
+        function generateUserPassword() { fetch('/api/generate_password').then(res => res.json()).then(data => { document.getElementById('userPassword').value = data.password; }); }
+        
+        function showUserForm() {
+            document.getElementById('userForm').style.display = 'block';
+            document.getElementById('userId').value = '';
+            document.getElementById('userUsername').value = '';
+            document.getElementById('userPassword').value = '';
+            document.getElementById('userFullName').value = '';
+            document.getElementById('userRole').value = 'user';
+            loadServerCheckboxes();
+            loadQueryCheckboxes();
+        }
+        
+        function hideUserForm() { document.getElementById('userForm').style.display = 'none'; }
+        
+        function loadServerCheckboxes() {
+            fetch('/api/admin/servers').then(res => res.json()).then(servers => {
+                let html = ''; servers.forEach(s => { html += `<label><input type="checkbox" class="serverAccess" value="${s.id}"> ${s.region_name} (${s.region_code}) - ${s.db_type === 'nsi' ? 'НСИ' : 'СДБП'}</label>`; });
+                document.getElementById('userServerAccess').innerHTML = html;
+            });
+        }
+        
+        function loadQueryCheckboxes() {
+            fetch('/api/admin/queries').then(res => res.json()).then(queries => {
+                let html = ''; queries.forEach(q => { html += `<label><input type="checkbox" class="queryAccess" value="${q.id}"> ${q.name}</label>`; });
+                document.getElementById('userQueryAccess').innerHTML = html;
+            });
+        }
+        
+        function editUser(id) {
+            fetch(`/api/admin/user/${id}`).then(res => res.json()).then(u => {
+                document.getElementById('userForm').style.display = 'block';
+                document.getElementById('userId').value = u.id;
+                document.getElementById('userUsername').value = u.username;
+                document.getElementById('userPassword').value = '';
+                document.getElementById('userFullName').value = u.full_name;
+                document.getElementById('userRole').value = u.role;
+                fetch('/api/admin/servers').then(res => res.json()).then(servers => {
+                    let serverHtml = ''; servers.forEach(s => { let checked = u.server_access.includes(s.id) ? 'checked' : ''; serverHtml += `<label><input type="checkbox" class="serverAccess" value="${s.id}" ${checked}> ${s.region_name} (${s.region_code}) - ${s.db_type === 'nsi' ? 'НСИ' : 'СДБП'}</label>`; });
+                    document.getElementById('userServerAccess').innerHTML = serverHtml;
+                });
+                fetch('/api/admin/queries').then(res => res.json()).then(queries => {
+                    let queryHtml = ''; queries.forEach(q => { let checked = u.query_access.includes(q.id) ? 'checked' : ''; queryHtml += `<label><input type="checkbox" class="queryAccess" value="${q.id}" ${checked}> ${q.name}</label>`; });
+                    document.getElementById('userQueryAccess').innerHTML = queryHtml;
+                });
+            });
+        }
+        
+        function saveUser() {
+            let serverAccess = []; document.querySelectorAll('.serverAccess:checked').forEach(cb => serverAccess.push(parseInt(cb.value)));
+            let queryAccess = []; document.querySelectorAll('.queryAccess:checked').forEach(cb => queryAccess.push(parseInt(cb.value)));
+            let data = { id: document.getElementById('userId').value || null, username: document.getElementById('userUsername').value, password: document.getElementById('userPassword').value, full_name: document.getElementById('userFullName').value, role: document.getElementById('userRole').value, server_access: serverAccess, query_access: queryAccess };
+            if (!data.username || !data.full_name) { alert('Заполните логин и полное имя'); return; }
+            fetch('/api/admin/save_user', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) }).then(res => res.json()).then(data => { if (data.success) { alert(data.message); if (data.password_shown) alert(`Пароль для пользователя: ${data.password_shown}\\nСохраните его!`); hideUserForm(); loadUsers(); } else alert('Ошибка: ' + data.error); });
+        }
+        
+        function deleteUser(id) { if (confirm('Удалить пользователя?')) { fetch(`/api/admin/delete_user/${id}`, {method: 'DELETE'}).then(() => loadUsers()); } }
+        
+        function loadLogs() {
+            fetch('/api/admin/logs').then(res => res.json()).then(data => {
+                let html = '<div style="overflow-x:auto;"><table><thead><tr><th>Дата</th><th>Пользователь</th><th>Действие</th><th>Детали</th></tr></thead><tbody>';
+                data.forEach(l => { html += `<tr><td>${l.timestamp}</td><td>${l.username}</td><td>${l.action}</td><td>${l.details}</tr>`; });
+                html += '</tbody></table></div>';
+                document.getElementById('logsList').innerHTML = html || '<p>Нет записей</p>';
+            });
+        }
     </script>
     {% endif %}
 </body>
 </html>
 '''
 
-# ---------------------- API МАРШРУТЫ ----------------------
+# ==================== API МАРШРУТЫ ====================
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
@@ -462,10 +703,13 @@ def index():
             log_action(user['id'], user['username'], "login", "Вход в систему", request.remote_addr)
             return redirect(url_for('index'))
         return render_template_string(MAIN_TEMPLATE, error="Неверный логин или пароль", servers=[], queries=[])
+
     if not session.get('user'):
         return render_template_string(MAIN_TEMPLATE, servers=[], queries=[])
+
     servers = get_user_servers(session['user']['id'], session['user']['role'])
     queries = get_user_queries(session['user']['id'], session['user']['role'])
+
     return render_template_string(MAIN_TEMPLATE, session=session, servers=servers, queries=queries)
 
 @app.route('/logout')
@@ -481,84 +725,132 @@ def api_generate_password():
 
 @app.route('/api/query/<int:query_id>')
 def api_get_query(query_id):
-    q = db.execute_query("SELECT id, name, description, sql_text, parameters, server_type FROM queries WHERE id=%s", (query_id,), fetch_one=True)
-    if not q:
+    query = db.execute_query("SELECT id, name, description, sql_text, parameters, server_type FROM queries WHERE id=%s", (query_id,), fetch_one=True)
+    if not query:
         return jsonify({"error": "Not found"}), 404
-    params = json.loads(q['parameters']) if q['parameters'] else []
-    return jsonify({"id": q['id'], "name": q['name'], "description": q['description'], "sql_text": q['sql_text'], "parameters": params, "server_type": q['server_type'] or ""})
+    
+    sql_text = query['sql_text']
+    found_params = re.findall(r':(\w+)', sql_text)
+    unique_params = list(dict.fromkeys(found_params))
+    
+    auto_params = [{"name": p, "label": p.replace('_', ' ').title(), "type": "text", "required": False, "placeholder": ""} for p in unique_params]
+    
+    saved_params = []
+    if query['parameters'] and query['parameters'].strip():
+        try:
+            saved_params = json.loads(query['parameters'])
+        except:
+            saved_params = []
+    
+    param_dict = {p['name']: p for p in auto_params}
+    for sp in saved_params:
+        if sp['name'] in param_dict:
+            param_dict[sp['name']].update(sp)
+        else:
+            param_dict[sp['name']] = sp
+    
+    return jsonify({
+        "id": query['id'], "name": query['name'], "description": query['description'],
+        "sql_text": sql_text, "parameters": list(param_dict.values()),
+        "server_type": query['server_type'] or ""
+    })
 
 @app.route('/api/execute', methods=['POST'])
 def api_execute():
     if not session.get('user'):
         return jsonify({"error": "Unauthorized"}), 401
+    
     data = request.json
     query_id = data.get('query_id')
     server_id = data.get('server_id')
     parameters = data.get('parameters', {})
     
-    q = db.execute_query("SELECT name, sql_text FROM queries WHERE id=%s", (query_id,), fetch_one=True)
-    if not q:
+    query = db.execute_query("SELECT name, sql_text FROM queries WHERE id=%s", (query_id,), fetch_one=True)
+    if not query:
         return jsonify({"error": "Query not found"}), 404
     
-    sql_text = q['sql_text']
+    sql_text = query['sql_text']
+    
+    # Строим WHERE условия только для заполненных параметров
     where_conditions = []
     params_for_execute = []
     
     if parameters.get('serial'):
         where_conditions.append("t.TerminalSerialNumber LIKE %s")
         params_for_execute.append(f"%{parameters['serial']}%")
+    
     if parameters.get('tuid'):
         where_conditions.append("JSON_UNQUOTE(JSON_EXTRACT(t.TerminalConfig, '$.EMV.OfflineTkpTerminalId')) LIKE %s")
         params_for_execute.append(f"%{parameters['tuid']}%")
+    
     if parameters.get('bank_tid'):
         where_conditions.append("e.ID LIKE %s")
         params_for_execute.append(f"%{parameters['bank_tid']}%")
     
+    # Если нет ни одного условия, возвращаем ошибку
     if not where_conditions:
-        return jsonify({"error": "Заполните хотя бы одно поле"}), 400
+        return jsonify({"error": "Заполните хотя бы одно поле для поиска"}), 400
     
+    # Собираем финальный SQL
     where_clause = " AND ".join(where_conditions)
     final_sql = sql_text.replace("{where_conditions}", where_clause)
     
+    print(f"DEBUG: Final SQL: {final_sql}")
+    print(f"DEBUG: Params: {params_for_execute}")
+    
+    # Подключаемся к БД
     db_conn, error = get_db_connection(server_id)
     if error:
         return jsonify({"error": error}), 500
+    
     try:
         with db_conn.cursor() as cursor:
             cursor.execute(final_sql, params_for_execute)
             results = cursor.fetchall()
         db_conn.close()
-        log_action(session['user']['id'], session['user']['username'], "execute_query", f"Запрос ID={query_id}", request.remote_addr)
+        log_action(session['user']['id'], session['user']['username'], "execute_query", f"Выполнен запрос ID={query_id}, сервер={server_id}", request.remote_addr)
+        
+        # Добавляем нумерацию
         for i, row in enumerate(results, 1):
             row['№'] = i
+        
         return jsonify({"results": results, "count": len(results)})
     except Exception as e:
         db_conn.close()
+        print(f"DEBUG: SQL Error: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/export_excel', methods=['POST'])
 def api_export_excel():
     if not session.get('user'):
         return jsonify({"error": "Unauthorized"}), 401
+    
     data = request.json
     results = data.get('results', [])
     if not results:
         return jsonify({"error": "Нет данных"}), 400
+    
     try:
-        import openpyxl, os
+        import openpyxl
+        from openpyxl.styles import Font, Alignment
+        import os
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"export_{timestamp}.xlsx"
+        filepath = os.path.join(os.path.dirname(__file__), filename)
         wb = openpyxl.Workbook()
         ws = wb.active
+        ws.title = "Результаты"
         headers = list(results[0].keys())
-        for c, h in enumerate(headers, 1):
-            ws.cell(row=1, column=c, value=h)
-        for r, row in enumerate(results, 2):
-            for c, h in enumerate(headers, 1):
-                ws.cell(row=r, column=c, value=str(row.get(h, '')))
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        fname = f"export_{ts}.xlsx"
-        path = os.path.join(os.path.dirname(__file__), fname)
-        wb.save(path)
-        return jsonify({"file_url": f"/download/{fname}"})
+        for col_num, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col_num, value=header)
+            cell.font = Font(bold=True)
+            cell.alignment = Alignment(horizontal="center")
+        for row_num, row_data in enumerate(results, 2):
+            for col_num, header in enumerate(headers, 1):
+                ws.cell(row=row_num, column=col_num, value=str(row_data.get(header, '')))
+        wb.save(filepath)
+        log_action(session['user']['id'], session['user']['username'], "export_excel", f"Экспортировано {len(results)} записей", request.remote_addr)
+        return jsonify({"file_url": f"/download/{filename}"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -566,33 +858,38 @@ def api_export_excel():
 def download_file(filename):
     from flask import send_file
     import os
-    return send_file(os.path.join(os.path.dirname(__file__), filename), as_attachment=True)
+    filepath = os.path.join(os.path.dirname(__file__), filename)
+    return send_file(filepath, as_attachment=True)
 
-# ----- АДМИН API -----
+# ==================== АДМИН API ====================
 @app.route('/api/admin/servers')
 def api_admin_servers():
     if not session.get('user') or session['user']['role'] != 'admin':
         return jsonify({"error": "Unauthorized"}), 401
-    srv = db.execute_query("SELECT id, region_code, region_name, host, database_name, db_type FROM servers", fetch_all=True) or []
-    return jsonify([{"id": s['id'], "region_code": s['region_code'], "region_name": s['region_name'], "host": s['host'], "database_name": s['database_name'], "db_type": s['db_type']} for s in srv])
+    servers = db.execute_query("SELECT id, region_code, region_name, host, database_name, db_type FROM servers", fetch_all=True) or []
+    return jsonify([{"id": s['id'], "region_code": s['region_code'], "region_name": s['region_name'], "host": s['host'], "database_name": s['database_name'], "db_type": s['db_type']} for s in servers])
 
 @app.route('/api/admin/server/<int:server_id>')
 def api_admin_server(server_id):
     if not session.get('user') or session['user']['role'] != 'admin':
         return jsonify({"error": "Unauthorized"}), 401
-    s = db.execute_query("SELECT id, region_code, region_name, host, database_name, db_type FROM servers WHERE id=%s", (server_id,), fetch_one=True)
-    return jsonify({"id": s['id'], "region_code": s['region_code'], "region_name": s['region_name'], "host": s['host'], "database_name": s['database_name'], "db_type": s['db_type']})
+    server = db.execute_query("SELECT id, region_code, region_name, host, database_name, db_type FROM servers WHERE id=%s", (server_id,), fetch_one=True)
+    if not server:
+        return jsonify({"error": "Not found"}), 404
+    return jsonify({"id": server['id'], "region_code": server['region_code'], "region_name": server['region_name'], "host": server['host'], "database_name": server['database_name'], "db_type": server['db_type']})
 
 @app.route('/api/admin/save_server', methods=['POST'])
 def api_admin_save_server():
     if not session.get('user') or session['user']['role'] != 'admin':
         return jsonify({"error": "Unauthorized"}), 401
-    d = request.json
+    data = request.json
     try:
-        if d.get('id'):
-            db.execute_query("UPDATE servers SET region_code=%s, region_name=%s, host=%s, database_name=%s, db_type=%s WHERE id=%s", (d['region_code'], d['region_name'], d['host'], d['database_name'], d['db_type'], d['id']))
+        if data.get('id'):
+            db.execute_query("UPDATE servers SET region_code=%s, region_name=%s, host=%s, database_name=%s, db_type=%s WHERE id=%s", (data['region_code'], data['region_name'], data['host'], data['database_name'], data['db_type'], data['id']))
+            log_action(session['user']['id'], session['user']['username'], "edit_server", f"Изменен сервер {data['region_code']}", request.remote_addr)
         else:
-            db.execute_query("INSERT INTO servers (region_code, region_name, host, database_name, db_type) VALUES (%s, %s, %s, %s, %s)", (d['region_code'], d['region_name'], d['host'], d['database_name'], d['db_type']))
+            db.execute_query("INSERT INTO servers (region_code, region_name, host, database_name, db_type) VALUES (%s, %s, %s, %s, %s)", (data['region_code'], data['region_name'], data['host'], data['database_name'], data['db_type']))
+            log_action(session['user']['id'], session['user']['username'], "add_server", f"Добавлен сервер {data['region_code']}", request.remote_addr)
         return jsonify({"success": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 400
@@ -603,27 +900,29 @@ def api_admin_delete_server(server_id):
         return jsonify({"error": "Unauthorized"}), 401
     db.execute_query("DELETE FROM servers WHERE id=%s", (server_id,))
     db.execute_query("DELETE FROM user_server_access WHERE server_id=%s", (server_id,))
+    log_action(session['user']['id'], session['user']['username'], "delete_server", f"Удален сервер ID={server_id}", request.remote_addr)
     return jsonify({"success": True})
 
 @app.route('/api/admin/queries')
 def api_admin_queries():
     if not session.get('user') or session['user']['role'] != 'admin':
         return jsonify({"error": "Unauthorized"}), 401
-    q = db.execute_query("SELECT id, name, description FROM queries", fetch_all=True) or []
-    return jsonify([{"id": qq['id'], "name": qq['name'], "description": qq['description']} for qq in q])
+    queries = db.execute_query("SELECT id, name, description FROM queries", fetch_all=True) or []
+    return jsonify([{"id": q['id'], "name": q['name'], "description": q['description']} for q in queries])
 
 @app.route('/api/admin/save_query', methods=['POST'])
 def api_admin_save_query():
     if not session.get('user') or session['user']['role'] != 'admin':
         return jsonify({"error": "Unauthorized"}), 401
-    d = request.json
-    params_json = json.dumps(d.get('parameters', []))
+    data = request.json
+    params_json = json.dumps(data.get('parameters', []))
     try:
-        if d.get('id'):
-            db.execute_query("UPDATE queries SET name=%s, description=%s, sql_text=%s, parameters=%s, server_type=%s WHERE id=%s", (d['name'], d.get('description', ''), d['sql_text'], params_json, d.get('server_type', ''), d['id']))
+        if data.get('id'):
+            db.execute_query("UPDATE queries SET name=%s, description=%s, sql_text=%s, parameters=%s, server_type=%s WHERE id=%s", (data['name'], data.get('description', ''), data['sql_text'], params_json, data.get('server_type', ''), data['id']))
+            log_action(session['user']['id'], session['user']['username'], "edit_query", f"Изменен запрос {data['name']}", request.remote_addr)
         else:
-            db.execute_query("INSERT INTO queries (name, description, sql_text, parameters, server_type, created_by) VALUES (%s, %s, %s, %s, %s, %s)", (d['name'], d.get('description', ''), d['sql_text'], params_json, d.get('server_type', ''), session['user']['id']))
-        log_action(session['user']['id'], session['user']['username'], "save_query", f"Сохранен запрос {d['name']}", request.remote_addr)
+            db.execute_query("INSERT INTO queries (name, description, sql_text, parameters, server_type, created_by) VALUES (%s, %s, %s, %s, %s, %s)", (data['name'], data.get('description', ''), data['sql_text'], params_json, data.get('server_type', ''), session['user']['id']))
+            log_action(session['user']['id'], session['user']['username'], "add_query", f"Добавлен запрос {data['name']}", request.remote_addr)
         return jsonify({"success": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 400
@@ -634,60 +933,84 @@ def api_admin_delete_query(query_id):
         return jsonify({"error": "Unauthorized"}), 401
     db.execute_query("DELETE FROM queries WHERE id=%s", (query_id,))
     db.execute_query("DELETE FROM user_query_access WHERE query_id=%s", (query_id,))
+    log_action(session['user']['id'], session['user']['username'], "delete_query", f"Удален запрос ID={query_id}", request.remote_addr)
     return jsonify({"success": True})
 
 @app.route('/api/admin/users')
 def api_admin_users():
     if not session.get('user') or session['user']['role'] != 'admin':
         return jsonify({"error": "Unauthorized"}), 401
-    u = db.execute_query("SELECT id, username, full_name, role FROM users", fetch_all=True) or []
-    return jsonify([{"id": uu['id'], "username": uu['username'], "full_name": uu['full_name'], "role": uu['role']} for uu in u])
+    users = db.execute_query("SELECT id, username, full_name, role FROM users", fetch_all=True) or []
+    return jsonify([{"id": u['id'], "username": u['username'], "full_name": u['full_name'], "role": u['role']} for u in users])
 
 @app.route('/api/admin/user/<int:user_id>')
 def api_admin_user(user_id):
     if not session.get('user') or session['user']['role'] != 'admin':
         return jsonify({"error": "Unauthorized"}), 401
-    u = db.execute_query("SELECT id, username, full_name, role FROM users WHERE id=%s", (user_id,), fetch_one=True)
-    server_acc = db.execute_query("SELECT server_id FROM user_server_access WHERE user_id=%s", (user_id,), fetch_all=True) or []
-    query_acc = db.execute_query("SELECT query_id FROM user_query_access WHERE user_id=%s", (user_id,), fetch_all=True) or []
-    return jsonify({"id": u['id'], "username": u['username'], "full_name": u['full_name'], "role": u['role'], "server_access": [a['server_id'] for a in server_acc], "query_access": [a['query_id'] for a in query_acc]})
+    user = db.execute_query("SELECT id, username, full_name, role FROM users WHERE id=%s", (user_id,), fetch_one=True)
+    server_access = db.execute_query("SELECT server_id FROM user_server_access WHERE user_id=%s", (user_id,), fetch_all=True) or []
+    query_access = db.execute_query("SELECT query_id FROM user_query_access WHERE user_id=%s", (user_id,), fetch_all=True) or []
+    if not user:
+        return jsonify({"error": "Not found"}), 404
+    return jsonify({
+        "id": user['id'], "username": user['username'], "full_name": user['full_name'], "role": user['role'],
+        "server_access": [a['server_id'] for a in server_access],
+        "query_access": [a['query_id'] for a in query_access]
+    })
 
 @app.route('/api/admin/save_user', methods=['POST'])
 def api_admin_save_user():
     if not session.get('user') or session['user']['role'] != 'admin':
         return jsonify({"error": "Unauthorized"}), 401
-    d = request.json
+    
+    data = request.json
     password_shown = None
+    
     try:
-        if d.get('id'):
-            if d.get('password') and d['password'].strip():
-                ph = hashlib.sha256(d['password'].encode()).hexdigest()
-                db.execute_query("UPDATE users SET username=%s, password_hash=%s, full_name=%s, role=%s WHERE id=%s", (d['username'], ph, d['full_name'], d['role'], d['id']))
+        if data.get('id'):
+            user_id = int(data['id'])
+            if data.get('password') and data['password'].strip():
+                password_hash = hashlib.sha256(data['password'].encode()).hexdigest()
+                db.execute_query("UPDATE users SET username=%s, password_hash=%s, full_name=%s, role=%s WHERE id=%s", (data['username'], password_hash, data['full_name'], data['role'], user_id))
+                log_action(session['user']['id'], session['user']['username'], "edit_user", f"Изменен пользователь {data['username']} (с изменением пароля)", request.remote_addr)
             else:
-                db.execute_query("UPDATE users SET username=%s, full_name=%s, role=%s WHERE id=%s", (d['username'], d['full_name'], d['role'], d['id']))
-            db.execute_query("DELETE FROM user_server_access WHERE user_id=%s", (d['id'],))
-            for sid in d.get('server_access', []):
-                db.execute_query("INSERT INTO user_server_access (user_id, server_id, can_view) VALUES (%s, %s, 1)", (d['id'], sid))
-            db.execute_query("DELETE FROM user_query_access WHERE user_id=%s", (d['id'],))
-            for qid in d.get('query_access', []):
-                db.execute_query("INSERT INTO user_query_access (user_id, query_id, can_view) VALUES (%s, %s, 1)", (d['id'], qid))
-            msg = "Обновлено"
+                db.execute_query("UPDATE users SET username=%s, full_name=%s, role=%s WHERE id=%s", (data['username'], data['full_name'], data['role'], user_id))
+                log_action(session['user']['id'], session['user']['username'], "edit_user", f"Изменен пользователь {data['username']}", request.remote_addr)
+            
+            db.execute_query("DELETE FROM user_server_access WHERE user_id=%s", (user_id,))
+            for server_id in data.get('server_access', []):
+                db.execute_query("INSERT INTO user_server_access (user_id, server_id, can_view) VALUES (%s, %s, 1)", (user_id, int(server_id)))
+            
+            db.execute_query("DELETE FROM user_query_access WHERE user_id=%s", (user_id,))
+            for query_id in data.get('query_access', []):
+                db.execute_query("INSERT INTO user_query_access (user_id, query_id, can_view) VALUES (%s, %s, 1)", (user_id, int(query_id)))
+            
+            message = "Пользователь обновлен"
         else:
-            if not d.get('password'):
-                return jsonify({"error": "Пароль обязателен"}), 400
-            ph = hashlib.sha256(d['password'].encode()).hexdigest()
-            uid = db.execute_query("INSERT INTO users (username, password_hash, full_name, role) VALUES (%s, %s, %s, %s)", (d['username'], ph, d['full_name'], d['role']))
-            for sid in d.get('server_access', []):
-                db.execute_query("INSERT INTO user_server_access (user_id, server_id, can_view) VALUES (%s, %s, 1)", (uid, sid))
-            for qid in d.get('query_access', []):
-                db.execute_query("INSERT INTO user_query_access (user_id, query_id, can_view) VALUES (%s, %s, 1)", (uid, qid))
-            password_shown = d['password']
-            msg = "Создан"
-        log_action(session['user']['id'], session['user']['username'], "save_user", f"Пользователь {d['username']}", request.remote_addr)
-        res = {"success": True, "message": msg}
+            if not data.get('password') or not data['password'].strip():
+                return jsonify({"error": "Для нового пользователя укажите пароль"}), 400
+            
+            existing = db.execute_query("SELECT id FROM users WHERE username=%s", (data['username'],), fetch_one=True)
+            if existing:
+                return jsonify({"error": f"Пользователь с логином '{data['username']}' уже существует"}), 400
+            
+            password_hash = hashlib.sha256(data['password'].encode()).hexdigest()
+            user_id = db.execute_query("INSERT INTO users (username, password_hash, full_name, role) VALUES (%s, %s, %s, %s)", (data['username'], password_hash, data['full_name'], data['role']))
+            
+            for server_id in data.get('server_access', []):
+                db.execute_query("INSERT INTO user_server_access (user_id, server_id, can_view) VALUES (%s, %s, 1)", (user_id, int(server_id)))
+            
+            for query_id in data.get('query_access', []):
+                db.execute_query("INSERT INTO user_query_access (user_id, query_id, can_view) VALUES (%s, %s, 1)", (user_id, int(query_id)))
+            
+            password_shown = data['password']
+            log_action(session['user']['id'], session['user']['username'], "add_user", f"Добавлен пользователь {data['username']}", request.remote_addr)
+            message = "Пользователь создан"
+        
+        result = {"success": True, "message": message}
         if password_shown:
-            res["password_shown"] = password_shown
-        return jsonify(res)
+            result["password_shown"] = password_shown
+        return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
@@ -695,12 +1018,13 @@ def api_admin_save_user():
 def api_admin_delete_user(user_id):
     if not session.get('user') or session['user']['role'] != 'admin':
         return jsonify({"error": "Unauthorized"}), 401
-    u = db.execute_query("SELECT username FROM users WHERE id=%s", (user_id,), fetch_one=True)
-    if u and u['username'] == 'admin':
-        return jsonify({"error": "Нельзя удалить админа"}), 400
+    user = db.execute_query("SELECT username FROM users WHERE id=%s", (user_id,), fetch_one=True)
+    if user and user['username'] == 'admin':
+        return jsonify({"error": "Нельзя удалить администратора"}), 400
     db.execute_query("DELETE FROM users WHERE id=%s", (user_id,))
     db.execute_query("DELETE FROM user_server_access WHERE user_id=%s", (user_id,))
     db.execute_query("DELETE FROM user_query_access WHERE user_id=%s", (user_id,))
+    log_action(session['user']['id'], session['user']['username'], "delete_user", f"Удален пользователь ID={user_id}", request.remote_addr)
     return jsonify({"success": True})
 
 @app.route('/api/admin/logs')
@@ -710,10 +1034,11 @@ def api_admin_logs():
     logs = db.execute_query("SELECT id, username, action, details, timestamp FROM logs ORDER BY id DESC LIMIT 200", fetch_all=True) or []
     return jsonify([{"id": l['id'], "username": l['username'], "action": l['action'], "details": l['details'], "timestamp": l['timestamp']} for l in logs])
 
+# ==================== ЗАПУСК ====================
 if __name__ == "__main__":
     print("\n" + "="*60)
     print("🚀 ВЕБ-ПРИЛОЖЕНИЕ ЗАПУЩЕНО")
-    print("📱 http://" + "186.246.2.145" + ":8080")
-    print("👤 admin / admin123")
+    print("📱 Откройте в браузере: http://0.0.0.0:8080")
+    print("👤 Логин: admin | Пароль: admin123")
     print("="*60 + "\n")
     app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False)
