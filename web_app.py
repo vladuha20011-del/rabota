@@ -115,41 +115,31 @@ class Database:
         cursor.close()
         conn.close()
     
-    def execute_query(self, query, params=None, fetch_one=False, fetch_all=False):
-        conn = self._get_conn()
-        cursor = conn.cursor(dictionary=True)
-        
-        try:
-            if params:
-                cursor.execute(query, params)
-            else:
-                cursor.execute(query)
-            
-            if fetch_one:
-                result = cursor.fetchone()
-                return result
-            elif fetch_all:
-                result = cursor.fetchall()
-                return result
-            else:
-                conn.commit()
-                return cursor.lastrowid
-        finally:
-            cursor.close()
-            conn.close()
+def execute_query(self, query, params=None, fetch_one=False, fetch_all=False):
+    conn = self._get_conn()
+    cursor = conn.cursor(dictionary=True)
     
-    def execute_many(self, query, params_list):
-        conn = self._get_conn()
-        cursor = conn.cursor()
-        try:
-            cursor.executemany(query, params_list)
+    try:
+        # Заменяем ? на %s для MySQL
+        query = query.replace('?', '%s')
+        
+        if params:
+            cursor.execute(query, params)
+        else:
+            cursor.execute(query)
+        
+        if fetch_one:
+            result = cursor.fetchone()
+            return result
+        elif fetch_all:
+            result = cursor.fetchall()
+            return result
+        else:
             conn.commit()
-        finally:
-            cursor.close()
-            conn.close()
-
-# Создаем глобальный экземпляр
-db = Database()
+            return cursor.lastrowid
+    finally:
+        cursor.close()
+        conn.close()
 
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 def log_action(user_id, username, action, details, ip=""):
