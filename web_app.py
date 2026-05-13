@@ -1056,7 +1056,7 @@ def start_web_server():
         print("👤 Логин: admin | Пароль: admin123")
         print("="*60 + "\n")
         threading.Timer(1.5, lambda: webbrowser.open('http://localhost:8080')).start()
-        app.run(host='127.0.0.1', port=8080, debug=False, use_reloader=False)
+        app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False)
     
     thread = threading.Thread(target=run, daemon=True)
     thread.start()
