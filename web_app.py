@@ -1052,6 +1052,9 @@ def start_web_server():
     thread.start()
     return thread
 
+# Создаем глобальный экземпляр
+db = Database()
+
 if __name__ == "__main__":
     start_web_server()
     try:
