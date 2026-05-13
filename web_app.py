@@ -168,29 +168,29 @@ def log_action(user_id, username, action, details, ip=""):
 
 def get_user_servers(user_id, user_role):
     if user_role == 'admin':
-        servers = db.execute_query("SELECT id, region_code, region_name, host, database_name, db_type FROM servers", fetch_all=True) or []
+        data = db.execute_query("SELECT id, region_code, region_name, host, database_name, db_type FROM servers", fetch_all=True) or []
     else:
-        servers = db.execute_query("""
+        data = db.execute_query("""
             SELECT s.id, s.region_code, s.region_name, s.host, s.database_name, s.db_type 
             FROM servers s
             JOIN user_server_access usa ON s.id = usa.server_id
-            WHERE usa.user_id = ? AND usa.can_view = 1
+            WHERE usa.user_id = %s AND usa.can_view = 1
         """, (user_id,), fetch_all=True) or []
     
-    return [{"id": s[0], "code": s[1], "name": s[2], "host": s[3], "database": s[4], "type": s[5]} for s in servers]
+    return [{"id": d["id"], "code": d["region_code"], "name": d["region_name"], "host": d["host"], "database": d["database_name"], "type": d["db_type"]} for d in data]
 
 def get_user_queries(user_id, user_role):
     if user_role == 'admin':
-        queries = db.execute_query("SELECT id, name, description FROM queries", fetch_all=True) or []
+        data = db.execute_query("SELECT id, name, description FROM queries", fetch_all=True) or []
     else:
-        queries = db.execute_query("""
+        data = db.execute_query("""
             SELECT q.id, q.name, q.description 
             FROM queries q
-            LEFT JOIN user_query_access uqa ON q.id = uqa.query_id AND uqa.user_id = ?
-            WHERE uqa.can_view = 1 OR q.created_by = ?
+            LEFT JOIN user_query_access uqa ON q.id = uqa.query_id AND uqa.user_id = %s
+            WHERE uqa.can_view = 1 OR q.created_by = %s
         """, (user_id, user_id), fetch_all=True) or []
     
-    return [{"id": q[0], "name": q[1], "description": q[2]} for q in queries]
+    return [{"id": d["id"], "name": d["name"], "description": d["description"]} for d in data]
 
 def generate_password(length=10):
     alphabet = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
